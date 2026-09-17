@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN
+  All artifacts must be written in zh-CN.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+rules:
+  tasks:
+    - 每个功能任务必须按 TDD 顺序书写：先写失败的测试（Red），再实现（Green），最后重构（Refactor）
+    - 任务描述中明确标注对应的测试文件路径（src/**/*.spec.ts）与验证命令（npm run test:run）
+    - 任务完成后必须以 `npm run test:run` 与 `npm run typecheck` 全绿作为完成标准
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
