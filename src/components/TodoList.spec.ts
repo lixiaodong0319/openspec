@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TodoList from './TodoList.vue'
 
 describe('TodoList', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   async function mountWithAdd(titles: string[]) {
     const wrapper = mount(TodoList)
     for (const title of titles) {

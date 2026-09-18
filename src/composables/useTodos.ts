@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 export interface Todo {
   id: number
@@ -8,10 +8,56 @@ export interface Todo {
 
 export type TodoFilter = { kind: 'all' | 'active' | 'completed' }
 
+const STORAGE_KEY = 'todo-list/todos'
+const STORAGE_VERSION = 1
+
+function isTodo(value: unknown): value is Todo {
+  if (typeof value !== 'object' || value === null) return false
+
+  const { id, title, completed } = value as Todo
+
+  return (
+    typeof id === 'number' &&
+    typeof title === 'string' &&
+    title !== '' &&
+    typeof completed === 'boolean'
+  )
+}
+
+function readTodos(): Todo[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw === null) return []
+
+    const parsed = JSON.parse(raw) as { version?: unknown; todos?: unknown }
+    if (typeof parsed !== 'object' || parsed === null) return []
+    if (parsed.version !== STORAGE_VERSION) return []
+    if (!Array.isArray(parsed.todos)) return []
+
+    return parsed.todos.filter(isTodo)
+  } catch {
+    return []
+  }
+}
+
+function writeTodos(todos: Todo[]) {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ version: STORAGE_VERSION, todos }),
+    )
+  } catch {
+    // 存储不可用（隐私模式、超配额等）时静默降级为纯内存模式
+  }
+}
+
 export function useTodos() {
-  const todos = ref<Todo[]>([])
+  const initialTodos = readTodos()
+  const todos = ref<Todo[]>(initialTodos)
   const filter = ref<TodoFilter>({ kind: 'all' })
-  let nextId = 0
+  let nextId = initialTodos.reduce((max, todo) => Math.max(max, todo.id + 1), 0)
+
+  watch(todos, () => writeTodos(todos.value), { deep: true })
 
   const filteredTodos = computed(() => {
     if (filter.value.kind === 'active') {

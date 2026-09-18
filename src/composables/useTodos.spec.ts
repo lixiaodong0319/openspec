@@ -1,7 +1,25 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { useTodos } from './useTodos'
 
+const STORAGE_KEY = 'todo-list/todos'
+
+function readStoredTodos() {
+  const raw = localStorage.getItem(STORAGE_KEY)
+  if (raw === null) return null
+
+  return JSON.parse(raw) as { version: number; todos: { title: string; completed: boolean }[] }
+}
+
 describe('useTodos', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   describe('新增待办', () => {
     it('初始列表为空数组', () => {
       const { todos } = useTodos()
@@ -92,18 +110,6 @@ describe('useTodos', () => {
       removeTodo(todos.value[0].id)
 
       expect(todos.value).toEqual([])
-    })
-  })
-
-  describe('实例隔离', () => {
-    it('每次调用返回相互独立的列表', () => {
-      const a = useTodos()
-      const b = useTodos()
-
-      a.addTodo('A')
-
-      expect(a.todos.value).toHaveLength(1)
-      expect(b.todos.value).toEqual([])
     })
   })
 
@@ -201,6 +207,184 @@ describe('useTodos', () => {
 
       addTodo('买牛奶')
       expect(filter.value).toEqual({ kind: 'all' })
+    })
+  })
+
+  describe('持久化到本地存储', () => {
+    it('新增待办后写入本地存储', async () => {
+      const { addTodo } = useTodos()
+
+      addTodo('买牛奶')
+      await nextTick()
+
+      const stored = readStoredTodos()
+      expect(stored?.version).toBe(1)
+      expect(stored?.todos.map((todo) => todo.title)).toEqual(['买牛奶'])
+    })
+
+    it('切换完成状态后同步到本地存储', async () => {
+      const { todos, addTodo, toggleTodo } = useTodos()
+      addTodo('A')
+      await nextTick()
+
+      toggleTodo(todos.value[0].id)
+      await nextTick()
+
+      expect(readStoredTodos()?.todos[0].completed).toBe(true)
+    })
+
+    it('删除待办后同步到本地存储', async () => {
+      const { todos, addTodo, removeTodo } = useTodos()
+      addTodo('A')
+      addTodo('B')
+      await nextTick()
+
+      removeTodo(todos.value[0].id)
+      await nextTick()
+
+      expect(readStoredTodos()?.todos.map((todo) => todo.title)).toEqual(['B'])
+    })
+
+    it('从本地存储恢复待办及其完成状态', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          todos: [
+            { id: 1, title: 'A', completed: true },
+            { id: 2, title: 'B', completed: false },
+          ],
+        }),
+      )
+
+      const { todos, activeCount, filter } = useTodos()
+
+      expect(todos.value.map((todo) => todo.title)).toEqual(['A', 'B'])
+      expect(todos.value.map((todo) => todo.completed)).toEqual([true, false])
+      expect(activeCount.value).toBe(1)
+      expect(filter.value).toEqual({ kind: 'all' })
+    })
+  })
+
+  describe('存储内容损坏时的降级', () => {
+    it('非法 JSON 时以空列表启动', () => {
+      localStorage.setItem(STORAGE_KEY, 'not json {')
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([])
+    })
+
+    it('内容是合法 JSON 但不是对象时以空列表启动', () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([1, 2, 3]))
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([])
+    })
+
+    it('version 不是 1 时以空列表启动', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 2, todos: [{ id: 1, title: 'A', completed: false }] }),
+      )
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([])
+    })
+
+    it('todos 不是数组时以空列表启动', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, todos: 'oops' }),
+      )
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([])
+    })
+
+    it('丢弃结构不合法的条目，保留合法条目', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          todos: [
+            { id: 1, title: '合法', completed: false },
+            { id: 2, completed: true },
+            { id: 3, title: '缺 completed' },
+            { id: 4, title: '类型不符', completed: 'yes' },
+            { id: '5', title: 'id 非数字', completed: false },
+            'not an object',
+            null,
+          ],
+        }),
+      )
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([{ id: 1, title: '合法', completed: false }])
+    })
+  })
+
+  describe('存储不可用时的降级', () => {
+    it('读取抛异常时以空列表启动', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('storage disabled')
+      })
+
+      const { todos } = useTodos()
+
+      expect(todos.value).toEqual([])
+    })
+
+    it('写入抛异常时待办仍出现在当前会话的列表中', () => {
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('quota exceeded')
+      })
+
+      const { todos, addTodo } = useTodos()
+
+      addTodo('买牛奶')
+
+      expect(todos.value.map((todo) => todo.title)).toEqual(['买牛奶'])
+    })
+  })
+
+  describe('id 冲突', () => {
+    it('恢复已有数据后新增的待办 id 不与已恢复条目冲突', () => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          todos: [{ id: 7, title: '已有', completed: false }],
+        }),
+      )
+
+      const { todos, addTodo, toggleTodo, removeTodo } = useTodos()
+      addTodo('新增')
+
+      const added = todos.value[1]
+      expect(added.id).not.toBe(7)
+
+      toggleTodo(added.id)
+      expect(todos.value.map((todo) => todo.completed)).toEqual([false, true])
+
+      removeTodo(added.id)
+      expect(todos.value.map((todo) => todo.title)).toEqual(['已有'])
+    })
+  })
+
+  describe('跨实例的持久化共享', () => {
+    it('两个实例共享同一份持久化数据', async () => {
+      const a = useTodos()
+      a.addTodo('A')
+      await nextTick()
+
+      const b = useTodos()
+
+      expect(b.todos.value.map((todo) => todo.title)).toEqual(['A'])
     })
   })
 })
